@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>NEON SNAKE</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script type="importmap">
+{"imports":{
+  "three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+}}
+</script>
+<style>
+:root{
+  --top:calc(var(--tg-safe-area-inset-top, env(safe-area-inset-top, 0px)) + var(--tg-content-safe-area-inset-top, 0px));
+  --cyan:#00f0ff;--pink:#ff2bd6;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+html,body{margin:0;height:100%;background:#030008;color:#fff;font-family:-apple-system,system-ui,Roboto,sans-serif;overflow:hidden;touch-action:none;overscroll-behavior:none}
+canvas{position:fixed;inset:0;width:100vw!important;height:100%!important;display:block}
+#hud{position:fixed;left:0;right:0;top:0;padding:calc(var(--top) + 10px) 18px 0;display:flex;justify-content:space-between;align-items:flex-start;pointer-events:none;z-index:2}
+#hud .side{width:64px;font-size:11px;letter-spacing:.15em;color:rgba(255,255,255,.55)}
+#hud .side b{display:block;font-size:18px;color:#fff;letter-spacing:0;margin-top:2px;text-shadow:0 0 10px var(--pink)}
+#scoreBox{text-align:center}
+#score{font-size:56px;font-weight:900;line-height:1;color:#fff;text-shadow:0 0 12px var(--cyan),0 0 32px var(--cyan),0 0 60px var(--pink);transition:transform .12s}
+#score.bump{transform:scale(1.35)}
+#fps{font-size:10px;letter-spacing:.2em;color:rgba(255,255,255,.35);margin-top:4px}
+#pauseBtn{pointer-events:auto;width:44px;height:44px;border-radius:50%;border:1.5px solid rgba(0,240,255,.6);background:rgba(0,240,255,.08);color:var(--cyan);font-size:14px;box-shadow:0 0 14px rgba(0,240,255,.35),inset 0 0 10px rgba(0,240,255,.2);margin-left:auto;display:flex;align-items:center;justify-content:center}
+#overlay{position:fixed;inset:0;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;text-align:center;padding:24px;background:radial-gradient(ellipse at center,rgba(20,0,40,.35),rgba(3,0,8,.8))}
+#overlay.hidden{display:none}
+#title{font-size:clamp(40px,13vw,72px);font-weight:900;line-height:.95;letter-spacing:.04em;color:#fff;
+  text-shadow:0 0 8px var(--pink),0 0 22px var(--pink),0 0 48px var(--pink),0 0 90px var(--cyan);animation:flick 4s infinite}
+#title span{display:block;color:#fff;text-shadow:0 0 8px var(--cyan),0 0 22px var(--cyan),0 0 48px var(--cyan),0 0 90px var(--pink)}
+#sub{font-size:15px;letter-spacing:.25em;color:rgba(255,255,255,.8);text-transform:uppercase}
+#hint{font-size:13px;letter-spacing:.3em;color:var(--cyan);text-transform:uppercase;animation:pulse 1.4s ease-in-out infinite;text-shadow:0 0 12px var(--cyan)}
+@keyframes pulse{50%{opacity:.35}}
+@keyframes flick{0%,18%,22%,62%,64%,100%{opacity:1}20%,63%{opacity:.55}}
+.pop{position:fixed;z-index:2;pointer-events:none;font-weight:900;font-size:26px;color:#fff;text-shadow:0 0 10px var(--pink),0 0 24px var(--pink);animation:up .8s ease-out forwards;transform:translate(-50%,-50%)}
+@keyframes up{to{transform:translate(-50%,-160%) scale(1.4);opacity:0}}
+#err{display:none;position:fixed;inset:0;z-index:5;align-items:center;justify-content:center;text-align:center;padding:30px;color:#aaa;background:#030008}
+</style>
+</head>
+<body>
+<div id="hud">
+  <div class="side">BEST<b id="best">0</b></div>
+  <div id="scoreBox"><div id="score">0</div><div id="fps">— FPS</div></div>
+  <div class="side" style="text-align:right"><button id="pauseBtn">❚❚</button></div>
+</div>
+<div id="overlay">
+  <div id="title">NEON<span>SNAKE</span></div>
+  <div id="sub">свайпай, чтобы рулить</div>
+  <div id="hint">тапни, чтобы начать</div>
+</div>
+<div id="err">Не удалось загрузить 3D-движок.<br>Проверь интернет и перезапусти.</div>
+
+<script>
+setTimeout(() => { if (!window.__ok) document.getElementById('err').style.display = 'flex'; }, 12000);
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+window.__ok = true;
+
+// ================= Telegram =================
+const tg = window.Telegram && window.Telegram.WebApp;
+const can = v => !!(tg && tg.isVersionAtLeast && tg.isVersionAtLeast(v));
+if (tg) {
+  tg.ready(); tg.expand();
+  try { if (can('7.7')) tg.disableVerticalSwipes(); } catch (e) {}
+  try { if (can('6.1')) { tg.setHeaderColor('#030008'); tg.setBackgroundColor('#030008'); } } catch (e) {}
+  try { if (can('7.10')) tg.setBottomBarColor('#030008'); } catch (e) {}
+  try { if (can('8.0') && (tg.platform === 'ios' || tg.platform === 'android')) tg.requestFullscreen(); } catch (e) {}
+  try { if (can('8.0')) tg.lockOrientation(); } catch (e) {}
+}
+const haptic = {
+  tap() { try { can('6.1') && tg.HapticFeedback.impactOccurred('light'); } catch (e) {} },
+  eat() { try { can('6.1') && tg.HapticFeedback.impactOccurred('heavy'); } catch (e) {} },
+  die() { try { can('6.1') && tg.HapticFeedback.notificationOccurred('error'); } catch (e) {} },
+};
+
+// ================= Best score =================
+let best = 0;
+const bestEl = document.getElementById('best');
+try { best = parseInt(localStorage.getItem('snake_best') || '0', 10) || 0; } catch (e) {}
+bestEl.textContent = best;
+if (can('6.9')) tg.CloudStorage.getItem('best', (err, v) => {
+  const n = parseInt(v || '0', 10) || 0;
+  if (!err && n > best) { best = n; bestEl.textContent = best; }
+});
+function saveBest() {
+  try { localStorage.setItem('snake_best', String(best)); } catch (e) {}
+  try { if (can('6.9')) tg.CloudStorage.setItem('best', String(best)); } catch (e) {}
+}
+
+// ================= Renderer / post =================
+const N = 16;
+let DPR = Math.min(window.devicePixelRatio || 1, 2);
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(DPR);
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color('#030008');
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 400);
+
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(DPR);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.9, 0.4, 0.55);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+const gx = x => x - N / 2 + 0.5;   // grid -> world
+
+// ================= Floor (neon grid shader) =================
+const floorU = {
+  uTime: { value: 0 }, uHead: { value: new THREE.Vector2() },
+  uRing: { value: new THREE.Vector3(0, 0, 0) }, uRingA: { value: 0 },
+  uDanger: { value: 0 }, uHalf: { value: N / 2 },
+};
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(N, N).rotateX(-Math.PI / 2), new THREE.ShaderMaterial({
+  uniforms: floorU,
+  vertexShader: `varying vec2 vP; void main(){ vec4 w = modelMatrix*vec4(position,1.); vP = w.xz; gl_Position = projectionMatrix*viewMatrix*w; }`,
+  fragmentShader: `
+    uniform float uTime, uRingA, uDanger, uHalf; uniform vec2 uHead; uniform vec3 uRing; varying vec2 vP;
+    void main(){
+      vec2 g = abs(fract(vP - 0.5) - 0.5) / fwidth(vP);
+      float line = 1.0 - clamp(min(g.x, g.y) / 1.3, 0.0, 1.0);
+      float d = distance(vP, uHead);
+      float m = 0.5 + 0.5 * sin(vP.x * 0.22 - vP.y * 0.18 + uTime * 0.9);
+      vec3 lc = mix(vec3(0.0, 0.85, 1.0), vec3(1.0, 0.08, 0.85), m);
+      lc = mix(lc, vec3(1.0, 0.05, 0.05), uDanger);
+      float glow = 0.06 + 0.9 * exp(-d * 0.4);
+      float rd = abs(distance(vP, uRing.xy) - uRing.z);
+      float ring = exp(-rd * 2.2) * uRingA;
+      vec2 e = abs(vP) / uHalf;
+      float edge = smoothstep(0.82, 1.0, max(e.x, e.y));
+      vec3 col = vec3(0.003, 0.0, 0.012);
+      col += lc * line * (glow + ring * 3.0 + edge * 0.2);
+      col += lc * (0.025 * exp(-d * 0.5) + ring * 0.08);
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+  extensions: { derivatives: true },
+}));
+scene.add(floor);
+
+// Endless synthwave grid outside the arena (scrolls toward the camera)
+const outerU = { uTime: { value: 0 }, uHalf: { value: N / 2 + 0.6 } };
+const outer = new THREE.Mesh(new THREE.PlaneGeometry(260, 260).rotateX(-Math.PI / 2), new THREE.ShaderMaterial({
+  uniforms: outerU,
+  vertexShader: `varying vec2 vP; void main(){ vec4 w = modelMatrix*vec4(position,1.); vP = w.xz; gl_Position = projectionMatrix*viewMatrix*w; }`,
+  fragmentShader: `
+    uniform float uTime, uHalf; varying vec2 vP;
+    void main(){
+      vec2 p = vP / 2.0; p.y += uTime * 0.6;
+      vec2 g = abs(fract(p - 0.5) - 0.5) / fwidth(p);
+      float line = 1.0 - clamp(min(g.x, g.y) / 1.2, 0.0, 1.0);
+      float fade = exp(-length(vP) * 0.035);
+      float inside = step(max(abs(vP.x), abs(vP.y)), uHalf);
+      vec3 c = mix(vec3(1.0, 0.1, 0.8), vec3(0.3, 0.1, 1.0), clamp(-vP.y / 60.0, 0.0, 1.0));
+      gl_FragColor = vec4(c * line * fade * 0.07 * (1.0 - inside) + vec3(0.002, 0.0, 0.01), 1.0);
+    }`,
+  extensions: { derivatives: true },
+}));
+outer.position.y = -0.35;
+scene.add(outer);
+
+// Arena border: neon tubes
+const borderMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 0.15, 1.8) });
+const H = N / 2 + 0.06;
+for (const [w, d, x, z] of [[N + 0.24, 0.12, 0, -H], [N + 0.24, 0.12, 0, H], [0.12, N + 0.24, -H, 0], [0.12, N + 0.24, H, 0]]) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.12, d), borderMat);
+  m.position.set(x, 0.06, z); scene.add(m);
+}
+// Corner pillars
+const pillarMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.15, 1.8, 2.2) });
+for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+  const p = new THREE.Mesh(new THREE.BoxGeometry(0.22, 1.4, 0.22), pillarMat);
+  p.position.set(sx * H, 0.7, sz * H); scene.add(p);
+}
+
+// ================= Stars & floating dust =================
+function dotTexture() {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const g = c.getContext('2d'), r = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.3, 'rgba(255,255,255,.6)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = r; g.fillRect(0, 0, 64, 64);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const DOT = dotTexture();
+{
+  const n = 600, pos = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, r = 60 + Math.random() * 80;
+    pos[i * 3] = Math.cos(a) * r; pos[i * 3 + 1] = 5 + Math.random() * 90; pos[i * 3 + 2] = Math.sin(a) * r - 40;
+  }
+  const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 0.9, map: DOT, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: 0x4a5a90 })));
+}
+const DUST = 160, dustPos = new Float32Array(DUST * 3), dustSp = new Float32Array(DUST);
+for (let i = 0; i < DUST; i++) {
+  dustPos[i * 3] = (Math.random() - 0.5) * (N + 6); dustPos[i * 3 + 1] = Math.random() * 8; dustPos[i * 3 + 2] = (Math.random() - 0.5) * (N + 6);
+  dustSp[i] = 0.2 + Math.random() * 0.6;
+}
+const dustGeo = new THREE.BufferGeometry(); dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+scene.add(new THREE.Points(dustGeo, new THREE.PointsMaterial({ size: 0.12, map: DOT, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, color: new THREE.Color(0.4, 1.2, 1.6) })));
+
+// ================= Neon shading for snake =================
+const neonVS = (inst) => `
+  varying vec3 vN, vV, vC; ${inst ? '' : 'uniform vec3 uColor;'}
+  void main(){
+    mat4 m = modelMatrix${inst ? ' * instanceMatrix' : ''};
+    vec4 w = m * vec4(position, 1.0);
+    vN = normalize(mat3(m) * normal);
+    vV = normalize(cameraPosition - w.xyz);
+    vC = ${inst ? 'instanceColor' : 'uColor'};
+    gl_Position = projectionMatrix * viewMatrix * w;
+  }`;
+const neonFS = `
+  varying vec3 vN, vV, vC;
+  void main(){
+    vec3 n = normalize(vN);
+    float lam = max(dot(n, normalize(vec3(-0.3, 1.0, 0.5))), 0.0);
+    float fr = pow(1.0 - max(dot(n, normalize(vV)), 0.0), 2.2);
+    vec3 col = vC * (0.15 + 0.45 * lam) + vC * fr * 1.1 + vec3(fr * 0.06);
+    gl_FragColor = vec4(col, 1.0);
+  }`;
+
+const MAX = N * N * 2 + 2;
+const body = new THREE.InstancedMesh(new THREE.SphereGeometry(0.42, 18, 12),
+  new THREE.ShaderMaterial({ vertexShader: neonVS(true), fragmentShader: neonFS }), MAX);
+body.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+for (let i = 0; i < MAX; i++) body.setColorAt(i, new THREE.Color());
+body.count = 0; body.frustumCulled = false;
+scene.add(body);
+
+const head = new THREE.Group();
+const headU = { uColor: { value: new THREE.Color() } };
+const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.5, 28, 20),
+  new THREE.ShaderMaterial({ uniforms: headU, vertexShader: neonVS(false), fragmentShader: neonFS }));
+headMesh.scale.set(1, 0.82, 1.15); head.add(headMesh);
+const eyeMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(4, 4, 4) });
+const pupilMat = new THREE.MeshBasicMaterial({ color: 0x000000 });
+for (const s of [1, -1]) {
+  const e = new THREE.Mesh(new THREE.SphereGeometry(0.14, 14, 10), eyeMat); e.position.set(0.21 * s, 0.2, 0.32); head.add(e);
+  const p = new THREE.Mesh(new THREE.SphereGeometry(0.07, 10, 8), pupilMat); p.position.set(0.22 * s, 0.23, 0.44); head.add(p);
+}
+scene.add(head);
+
+// ================= Food: energy crystal + light beam =================
+const food3 = new THREE.Group();
+const coreMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.8, 0.9, 0.08) });
+const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.28, 0), coreMat); food3.add(core);
+const cage = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.IcosahedronGeometry(0.46, 0)),
+  new THREE.LineBasicMaterial({ color: new THREE.Color(1.6, 0.3, 1.4) })); food3.add(cage);
+const halo = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.025, 8, 48), new THREE.MeshBasicMaterial({ color: new THREE.Color(0.2, 1.3, 1.8) }));
+halo.rotation.x = Math.PI / 2; food3.add(halo);
+const beamGeo = new THREE.CylinderGeometry(0.06, 0.32, 9, 20, 1, true).translate(0, 4.5, 0);
+const beam = new THREE.Mesh(beamGeo, new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+  uniforms: { uTime: floorU.uTime },
+  vertexShader: `varying float vY; void main(){ vY = position.y; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.); }`,
+  fragmentShader: `uniform float uTime; varying float vY; void main(){ float a = pow(1.0 - vY / 9.0, 2.5) * (0.55 + 0.15 * sin(uTime * 8.0 - vY * 2.0)); gl_FragColor = vec4(vec3(1.0, 0.7, 0.2) * a, a); }`,
+}));
+scene.add(beam);
+scene.add(food3);
+
+// Shockwave ring
+const shock = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 64).rotateX(-Math.PI / 2),
+  new THREE.MeshBasicMaterial({ color: new THREE.Color(1, 1, 1), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+shock.visible = false; shock.position.y = 0.05; scene.add(shock);
+let shockT = 1;
+
+// ================= Particles =================
+const P = 700, pPos = new Float32Array(P * 3), pCol = new Float32Array(P * 3), pBase = new Float32Array(P * 3), pVel = new Float32Array(P * 3), pLife = new Float32Array(P), pMax = new Float32Array(P);
+for (let i = 0; i < P; i++) pPos[i * 3 + 1] = -999;
+const pGeo = new THREE.BufferGeometry();
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3).setUsage(THREE.DynamicDrawUsage));
+pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 3).setUsage(THREE.DynamicDrawUsage));
+const pts = new THREE.Points(pGeo, new THREE.PointsMaterial({ size: 0.32, map: DOT, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+pts.frustumCulled = false; scene.add(pts);
+let pNext = 0;
+function burst(x, y, z, color, n, speed, up = 3, life = 0.8) {
+  for (let k = 0; k < n; k++) {
+    const i = pNext; pNext = (pNext + 1) % P;
+    pPos[i * 3] = x; pPos[i * 3 + 1] = y; pPos[i * 3 + 2] = z;
+    const a = Math.random() * Math.PI * 2, s = speed * (0.4 + Math.random());
+    pVel[i * 3] = Math.cos(a) * s; pVel[i * 3 + 1] = up * (0.3 + Math.random()); pVel[i * 3 + 2] = Math.sin(a) * s;
+    const c = color.clone().offsetHSL((Math.random() - 0.5) * 0.15, 0, 0).multiplyScalar(2.5);
+    pBase[i * 3] = c.r; pBase[i * 3 + 1] = c.g; pBase[i * 3 + 2] = c.b;
+    pLife[i] = pMax[i] = life * (0.6 + Math.random() * 0.6);
+  }
+}
+
+// ================= Camera fit =================
+const camBase = new THREE.Vector3(), lookBase = new THREE.Vector3(0, 0, 1.2);
+const camOff = new THREE.Vector3();
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  composer.setSize(w, h);
+  camera.aspect = w / h;
+  const tilt = THREE.MathUtils.degToRad(66);
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+  const dist = Math.max((N + 2) * 0.6 / t, (N / 2 + 0.8) / (t * camera.aspect) * 1.1);
+  camBase.set(0, Math.sin(tilt) * dist, Math.cos(tilt) * dist);
+  lookBase.set(0, 0, camera.aspect < 0.8 ? -0.6 : 0.3);
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+if (tg) { tg.onEvent('viewportChanged', resize); tg.onEvent('fullscreenChanged', resize); }
+
+// ================= Game logic =================
+const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+let snake = null, prev, dir = 'right', queue, food, score, stepMs, state = 'menu', acc = 0;
+let headAngle = Math.PI / 2, shake = 0, time = 0, fovKick = 0, danger = 0, overAt = 0, hueBase = 0;
+const scoreEl = document.getElementById('score');
+const overlay = document.getElementById('overlay');
+const titleEl = document.getElementById('title');
+const subEl = document.getElementById('sub');
+const hintEl = document.getElementById('hint');
+const pauseBtn = document.getElementById('pauseBtn');
+
+function reset() {
+  const m = Math.floor(N / 2);
+  snake = [{ x: m, y: m + 2 }, { x: m - 1, y: m + 2 }, { x: m - 2, y: m + 2 }];
+  prev = snake.map(s => ({ ...s }));
+  dir = 'right'; queue = []; score = 0; stepMs = 150; headAngle = Math.PI / 2; danger = 0;
+  scoreEl.textContent = 0;
+  placeFood();
+}
+function placeFood() {
+  const free = [];
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++)
+    if (!snake.some(s => s.x === x && s.y === y)) free.push({ x, y });
+  food = free.length ? free[(Math.random() * free.length) | 0] : null;
+}
+function turn(d) {
+  if (state !== 'play') return;
+  const lastDir = queue.length ? queue[queue.length - 1] : dir;
+  const [ax, ay] = DIRS[lastDir], [bx, by] = DIRS[d];
+  if (d === lastDir || (ax + bx === 0 && ay + by === 0)) return;
+  if (queue.length < 3) { queue.push(d); haptic.tap(); }
+}
+function popText(x, z, text) {
+  const v = new THREE.Vector3(x, 0.8, z).project(camera);
+  const el = document.createElement('div');
+  el.className = 'pop'; el.textContent = text;
+  el.style.left = ((v.x + 1) / 2 * window.innerWidth) + 'px';
+  el.style.top = ((1 - v.y) / 2 * window.innerHeight) + 'px';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 850);
+}
+function step() {
+  if (queue.length) dir = queue.shift();
+  const [dx, dy] = DIRS[dir];
+  const h = { x: snake[0].x + dx, y: snake[0].y + dy };
+  const eating = food && h.x === food.x && h.y === food.y;
+  const rest = eating ? snake : snake.slice(0, -1);
+  if (h.x < 0 || h.y < 0 || h.x >= N || h.y >= N || rest.some(s => s.x === h.x && s.y === h.y)) return gameOver();
+  const old = snake;
+  snake = [h, ...rest];
+  prev = snake.map((_, i) => ({ ...(old[i] || old[old.length - 1]) }));
+  if (eating) {
+    score++; scoreEl.textContent = score;
+    scoreEl.classList.add('bump'); setTimeout(() => scoreEl.classList.remove('bump'), 120);
+    stepMs = Math.max(68, stepMs - 3);
+    const fx = gx(food.x), fz = gx(food.y);
+    haptic.eat();
+    burst(fx, 0.5, fz, new THREE.Color().setHSL(0.12, 1, 0.55), 50, 4, 5);
+    burst(fx, 0.5, fz, new THREE.Color().setHSL(0.85, 1, 0.55), 30, 6, 2);
+    floorU.uRing.value.set(fx, fz, 0); floorU.uRingA.value = 1;
+    shock.position.x = fx; shock.position.z = fz; shockT = 0; shock.visible = true;
+    fovKick = 5; hueBase += 0.08;
+    popText(fx, fz, '+1');
+    placeFood();
+    if (!food) return gameOver(true);
+  }
+}
+function gameOver(win) {
+  state = 'over'; acc = 0; overAt = performance.now();
+  haptic.die();
+  if (!win) {
+    shake = 0.6; danger = 1;
+    snake.forEach((s, i) => {
+      const c = new THREE.Color().setHSL((hueBase + i * 0.025) % 1, 1, 0.55);
+      burst(gx(s.x), 0.4, gx(s.y), c, i === 0 ? 40 : 8, 5, 6, 1.2);
+    });
+    snake = null;
+  }
+  let rec = '';
+  if (score > best) { best = score; bestEl.textContent = best; saveBest(); rec = ' · РЕКОРД!'; }
+  setTimeout(() => {
+    titleEl.innerHTML = win ? 'YOU<span>WIN</span>' : 'GAME<span>OVER</span>';
+    subEl.textContent = 'счёт ' + score + rec;
+    hintEl.textContent = 'тапни, чтобы ещё раз';
+    overlay.classList.remove('hidden');
+  }, 700);
+}
+function start() {
+  reset(); state = 'play'; acc = 0;
+  overlay.classList.add('hidden'); pauseBtn.textContent = '❚❚';
+}
+function pause() {
+  if (state !== 'play') return;
+  state = 'pause'; pauseBtn.textContent = '▶️';
+  titleEl.innerHTML = 'PAU<span>SE</span>';
+  subEl.textContent = 'счёт ' + score; hintEl.textContent = 'тапни, чтобы продолжить';
+  overlay.classList.remove('hidden');
+}
+function resume() { state = 'play'; pauseBtn.textContent = '❚❚'; overlay.classList.add('hidden'); }
+pauseBtn.addEventListener('click', e => { e.stopPropagation(); haptic.tap(); state === 'play' ? pause() : state === 'pause' && resume(); });
+overlay.addEventListener('click', () => {
+  if (state === 'over' && performance.now() - overAt < 900) return;
+  haptic.tap();
+  state === 'pause' ? resume() : start();
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
+
+// ================= Render loop (uncapped — runs at the display's refresh rate) =================
+const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), scl = new THREE.Vector3(), v = new THREE.Vector3();
+const col = new THREE.Color();
+const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpH = new THREE.Vector3();
+const fpsEl = document.getElementById('fps');
+let frames = 0, fpsT = 0, lastT = performance.now(), lowT = 0, lowered = false;
+
+function segPos(i, a, out) {
+  const p = prev[i], c = snake[i];
+  return out.set(gx(p.x + (c.x - p.x) * a), 0, gx(p.y + (c.y - p.y) * a));
+}
+
+function frame(t) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (t - lastT) / 1000); lastT = t; time += dt;
+  floorU.uTime.value = time; outerU.uTime.value = time;
+
+  if (state === 'play') {
+    acc += dt * 1000;
+    while (acc >= stepMs && state === 'play') { acc -= stepMs; step(); }
+  }
+  const a = state === 'play' ? Math.min(1, acc / stepMs) : 1;
+
+  // --- snake ---
+  if (snake) {
+    const L = snake.length; let k = 0;
+    const hb = hueBase + time * 0.04;
+    for (let i = 1; i < L; i++) {
+      segPos(i, a, tmpA); segPos(i - 1, a, tmpB);
+      const f = i / L, sz = 1 - f * 0.4;
+      const wob = Math.sin(time * 6 - i * 0.6) * 0.04;
+      col.setHSL((hb + i * 0.025) % 1, 1, 0.5);
+      v.copy(tmpA).lerp(tmpB, 0.5); v.y = 0.36 * sz + wob;
+      mtx.compose(v, q, scl.set(sz, sz * 0.85, sz)); body.setMatrixAt(k, mtx); body.setColorAt(k++, col);
+      v.copy(tmpA); v.y = 0.36 * sz + wob;
+      mtx.compose(v, q, scl.set(sz, sz * 0.85, sz)); body.setMatrixAt(k, mtx); body.setColorAt(k++, col);
+    }
+    body.count = k;
+    body.instanceMatrix.needsUpdate = true;
+    body.instanceColor.needsUpdate = true;
+
+    segPos(0, a, tmpH);
+    head.position.set(tmpH.x, 0.4 + Math.sin(time * 12) * 0.025, tmpH.z);
+    const [dx, dy] = DIRS[dir];
+    let d = Math.atan2(dx, dy) - headAngle; d = Math.atan2(Math.sin(d), Math.cos(d));
+    headAngle += d * Math.min(1, dt * 22);
+    head.rotation.y = headAngle;
+    headU.uColor.value.setHSL(hb % 1, 1, 0.55);
+    head.visible = true;
+    floorU.uHead.value.set(tmpH.x, tmpH.z);
+    // snake trail sparks
+    if (state === 'play' && Math.random() < dt * 30) {
+      const tl = snake.length - 1; segPos(tl, a, tmpA);
+      burst(tmpA.x, 0.3, tmpA.z, col.setHSL((hb + tl * 0.025) % 1, 1, 0.5), 1, 0.4, 1.2, 0.6);
+    }
+  } else {
+    body.count = 0; head.visible = false;
+    floorU.uHead.value.set(0, 999);
+  }
+
+  // --- food ---
+  const showFood = !!(snake && food);
+  food3.visible = beam.visible = showFood;
+  if (showFood) {
+    const fx = gx(food.x), fz = gx(food.y);
+    food3.position.set(fx, 0.6 + Math.sin(time * 3) * 0.12, fz);
+    core.rotation.y = time * 2.5; core.rotation.x = time * 1.3;
+    cage.rotation.y = -time * 1.2; cage.rotation.z = time * 0.7;
+    halo.scale.setScalar(1 + Math.sin(time * 5) * 0.12);
+    beam.position.set(fx, 0, fz);
+  }
+
+  // --- fx ---
+  if (floorU.uRingA.value > 0) { floorU.uRing.value.z += dt * 14; floorU.uRingA.value = Math.max(0, floorU.uRingA.value - dt * 1.3); }
+  if (shock.visible) {
+    shockT += dt * 2.2; const s = 0.3 + shockT * 3.5;
+    shock.scale.set(s, 1, s); shock.material.opacity = Math.max(0, 1 - shockT);
+    shock.material.color.setHSL(0.12 + shockT * 0.6, 1, 0.6).multiplyScalar(2);
+    if (shockT >= 1) shock.visible = false;
+  }
+  danger = Math.max(0, danger - dt * 0.8); floorU.uDanger.value = danger;
+
+  for (let i = 0; i < P; i++) {
+    if (pLife[i] <= 0) continue;
+    pLife[i] -= dt;
+    const j = i * 3;
+    if (pLife[i] <= 0) { pPos[j + 1] = -999; continue; }
+    pVel[j + 1] -= 9 * dt;
+    pPos[j] += pVel[j] * dt; pPos[j + 1] += pVel[j + 1] * dt; pPos[j + 2] += pVel[j + 2] * dt;
+    if (pPos[j + 1] < 0.05) { pPos[j + 1] = 0.05; pVel[j + 1] *= -0.4; pVel[j] *= 0.7; pVel[j + 2] *= 0.7; }
+    const f = pLife[i] / pMax[i];
+    pCol[j] = pBase[j] * f; pCol[j + 1] = pBase[j + 1] * f; pCol[j + 2] = pBase[j + 2] * f;
+  }
+  pGeo.attributes.position.needsUpdate = true; pGeo.attributes.color.needsUpdate = true;
+
+  for (let i = 0; i < DUST; i++) {
+    dustPos[i * 3 + 1] += dustSp[i] * dt;
+    if (dustPos[i * 3 + 1] > 8) dustPos[i * 3 + 1] = 0;
+  }
+  dustGeo.attributes.position.needsUpdate = true;
+
+  // --- camera: gently follows the head, kicks on eat, shakes on death ---
+  const hx = snake ? tmpH.x : 0, hz = snake ? tmpH.z : 0;
+  camOff.lerp(v.set(hx * 0.04, 0, hz * 0.06), Math.min(1, dt * 3));
+  camera.position.copy(camBase).add(camOff);
+  if (state === 'menu') { camera.position.x += Math.sin(time * 0.4) * 1.5; }
+  if (shake > 0) {
+    shake -= dt; const s = shake * 1.2;
+    camera.position.x += (Math.random() - 0.5) * s; camera.position.y += (Math.random() - 0.5) * s;
+  }
+  camera.lookAt(v.copy(lookBase).add(camOff));
+  fovKick *= Math.exp(-dt * 8);
+  const fov = 50 + fovKick;
+  if (Math.abs(camera.fov - fov) > 0.01) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  bloom.strength = 0.9 + fovKick * 0.06 + danger * 0.6;
+
+  composer.render();
+
+  // --- fps meter + adaptive quality ---
+  frames++; fpsT += dt;
+  if (fpsT >= 0.5) {
+    const fps = frames / fpsT;
+    fpsEl.textContent = Math.round(fps) + ' FPS';
+    if (!lowered && fps < 45) { lowT += fpsT; if (lowT > 2) { lowered = true; DPR = 1; renderer.setPixelRatio(1); composer.setPixelRatio(1); resize(); } }
+    frames = 0; fpsT = 0;
+  }
+}
+
+// ================= Swipe input =================
+let sx = null, sy = null;
+addEventListener('touchstart', e => {
+  const t = e.touches[0]; sx = t.clientX; sy = t.clientY;
+}, { passive: true });
+addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (sx === null) return;
+  const t = e.touches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
+  turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  sx = t.clientX; sy = t.clientY;
+}, { passive: false });
+addEventListener('touchend', () => { sx = sy = null; });
+// mouse drag & keyboard for desktop
+let md = null;
+addEventListener('mousedown', e => { md = { x: e.clientX, y: e.clientY }; });
+addEventListener('mousemove', e => {
+  if (!md) return;
+  const dx = e.clientX - md.x, dy = e.clientY - md.y;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
+  turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  md = { x: e.clientX, y: e.clientY };
+});
+addEventListener('mouseup', () => { md = null; });
+const KEYS = { arrowup: 'up', arrowdown: 'down', arrowleft: 'left', arrowright: 'right', w: 'up', s: 'down', a: 'left', d: 'right', 'ц': 'up', 'ы': 'down', 'ф': 'left', 'в': 'right' };
+addEventListener('keydown', e => {
+  const k = KEYS[(e.key || '').toLowerCase()];
+  if (k) { e.preventDefault(); turn(k); }
+  else if (e.key === ' ' || e.key === 'Enter') {
+    e.preventDefault();
+    if (state === 'menu' || state === 'over') start(); else state === 'play' ? pause() : resume();
+  }
+});
+
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
