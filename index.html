@@ -114,7 +114,7 @@ const bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.9, 0.4, 0.55);
 composer.addPass(bloom);
 composer.addPass(new OutputPass());
 
-const gx = x => x - N / 2 + 0.5;   // grid -> world
+const gx = x => x - N / 2 + 0.5;
 
 // ================= Floor (neon grid shader) =================
 const floorU = {
@@ -148,7 +148,7 @@ const floor = new THREE.Mesh(new THREE.PlaneGeometry(N, N).rotateX(-Math.PI / 2)
 }));
 scene.add(floor);
 
-// Endless synthwave grid outside the arena (scrolls toward the camera)
+// Endless synthwave grid outside the arena
 const outerU = { uTime: { value: 0 }, uHalf: { value: N / 2 + 0.6 } };
 const outer = new THREE.Mesh(new THREE.PlaneGeometry(260, 260).rotateX(-Math.PI / 2), new THREE.ShaderMaterial({
   uniforms: outerU,
@@ -314,10 +314,12 @@ function resize() {
 window.addEventListener('resize', resize);
 if (tg) { tg.onEvent('viewportChanged', resize); tg.onEvent('fullscreenChanged', resize); }
 
-// ================= Game logic =================
+// ================= Game logic (Ultra Responsive) =================
 const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
 let snake = null, prev, dir = 'right', queue, food, score, stepMs, state = 'menu', acc = 0;
 let headAngle = Math.PI / 2, shake = 0, time = 0, fovKick = 0, danger = 0, overAt = 0, hueBase = 0;
+let lastStepTime = 0;
+
 const scoreEl = document.getElementById('score');
 const overlay = document.getElementById('overlay');
 const titleEl = document.getElementById('title');
@@ -329,8 +331,10 @@ function reset() {
   const m = Math.floor(N / 2);
   snake = [{ x: m, y: m + 2 }, { x: m - 1, y: m + 2 }, { x: m - 2, y: m + 2 }];
   prev = snake.map(s => ({ ...s }));
-  dir = 'right'; queue = []; score = 0; stepMs = 150; headAngle = Math.PI / 2; danger = 0;
+  dir = 'right'; queue = []; score = 0; stepMs = 135; headAngle = Math.PI / 2; danger = 0;
   scoreEl.textContent = 0;
+  acc = 0;
+  lastStepTime = performance.now();
   placeFood();
 }
 function placeFood() {
@@ -339,13 +343,32 @@ function placeFood() {
     if (!snake.some(s => s.x === x && s.y === y)) free.push({ x, y });
   food = free.length ? free[(Math.random() * free.length) | 0] : null;
 }
+
 function turn(d) {
   if (state !== 'play') return;
-  const lastDir = queue.length ? queue[queue.length - 1] : dir;
-  const [ax, ay] = DIRS[lastDir], [bx, by] = DIRS[d];
-  if (d === lastDir || (ax + bx === 0 && ay + by === 0)) return;
-  if (queue.length < 3) { queue.push(d); haptic.tap(); }
+  const currentHeading = dir;
+  const [ax, ay] = DIRS[currentHeading], [bx, by] = DIRS[d];
+
+  if (d === currentHeading || (ax + bx === 0 && ay + by === 0)) return;
+
+  const now = performance.now();
+  const timeSinceLastStep = now - lastStepTime;
+
+  // Если с момента последнего шага прошло >35ms — применяем шаг МГНОВЕННО
+  if (timeSinceLastStep > 35) {
+    dir = d;
+    queue = [];
+    haptic.tap();
+    step();
+    acc = 0;
+  } else {
+    if (queue.length < 2) {
+      queue.push(d);
+      haptic.tap();
+    }
+  }
 }
+
 function popText(x, z, text) {
   const v = new THREE.Vector3(x, 0.8, z).project(camera);
   const el = document.createElement('div');
@@ -355,20 +378,25 @@ function popText(x, z, text) {
   document.body.appendChild(el);
   setTimeout(() => el.remove(), 850);
 }
+
 function step() {
   if (queue.length) dir = queue.shift();
+  lastStepTime = performance.now();
+
   const [dx, dy] = DIRS[dir];
   const h = { x: snake[0].x + dx, y: snake[0].y + dy };
   const eating = food && h.x === food.x && h.y === food.y;
   const rest = eating ? snake : snake.slice(0, -1);
   if (h.x < 0 || h.y < 0 || h.x >= N || h.y >= N || rest.some(s => s.x === h.x && s.y === h.y)) return gameOver();
+
   const old = snake;
   snake = [h, ...rest];
   prev = snake.map((_, i) => ({ ...(old[i] || old[old.length - 1]) }));
+
   if (eating) {
     score++; scoreEl.textContent = score;
     scoreEl.classList.add('bump'); setTimeout(() => scoreEl.classList.remove('bump'), 120);
-    stepMs = Math.max(68, stepMs - 3);
+    stepMs = Math.max(65, stepMs - 2.5);
     const fx = gx(food.x), fz = gx(food.y);
     haptic.eat();
     burst(fx, 0.5, fz, new THREE.Color().setHSL(0.12, 1, 0.55), 50, 4, 5);
@@ -381,6 +409,7 @@ function step() {
     if (!food) return gameOver(true);
   }
 }
+
 function gameOver(win) {
   state = 'over'; acc = 0; overAt = performance.now();
   haptic.die();
@@ -401,6 +430,7 @@ function gameOver(win) {
     overlay.classList.remove('hidden');
   }, 700);
 }
+
 function start() {
   reset(); state = 'play'; acc = 0;
   overlay.classList.add('hidden'); pauseBtn.textContent = '❚❚';
@@ -421,7 +451,7 @@ overlay.addEventListener('click', () => {
 });
 document.addEventListener('visibilitychange', () => { if (document.hidden) pause(); });
 
-// ================= Render loop (uncapped — runs at the display's refresh rate) =================
+// ================= Render loop =================
 const mtx = new THREE.Matrix4(), q = new THREE.Quaternion(), scl = new THREE.Vector3(), v = new THREE.Vector3();
 const col = new THREE.Color();
 const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3(), tmpH = new THREE.Vector3();
@@ -466,12 +496,12 @@ function frame(t) {
     head.position.set(tmpH.x, 0.4 + Math.sin(time * 12) * 0.025, tmpH.z);
     const [dx, dy] = DIRS[dir];
     let d = Math.atan2(dx, dy) - headAngle; d = Math.atan2(Math.sin(d), Math.cos(d));
-    headAngle += d * Math.min(1, dt * 22);
+    headAngle += d * Math.min(1, dt * 38); // Ускоренный доворот морды
     head.rotation.y = headAngle;
     headU.uColor.value.setHSL(hb % 1, 1, 0.55);
     head.visible = true;
     floorU.uHead.value.set(tmpH.x, tmpH.z);
-    // snake trail sparks
+
     if (state === 'play' && Math.random() < dt * 30) {
       const tl = snake.length - 1; segPos(tl, a, tmpA);
       burst(tmpA.x, 0.3, tmpA.z, col.setHSL((hb + tl * 0.025) % 1, 1, 0.5), 1, 0.4, 1.2, 0.6);
@@ -522,7 +552,7 @@ function frame(t) {
   }
   dustGeo.attributes.position.needsUpdate = true;
 
-  // --- camera: gently follows the head, kicks on eat, shakes on death ---
+  // --- camera ---
   const hx = snake ? tmpH.x : 0, hz = snake ? tmpH.z : 0;
   camOff.lerp(v.set(hx * 0.04, 0, hz * 0.06), Math.min(1, dt * 3));
   camera.position.copy(camBase).add(camOff);
@@ -539,7 +569,7 @@ function frame(t) {
 
   composer.render();
 
-  // --- fps meter + adaptive quality ---
+  // --- fps meter ---
   frames++; fpsT += dt;
   if (fpsT >= 0.5) {
     const fps = frames / fpsT;
@@ -549,27 +579,33 @@ function frame(t) {
   }
 }
 
-// ================= Swipe input =================
+// ================= Ultra-responsive Swipe input =================
 let sx = null, sy = null;
+const SWIPE_DIST = 11; // Минимальный ход пальца для отклика
+
 addEventListener('touchstart', e => {
   const t = e.touches[0]; sx = t.clientX; sy = t.clientY;
 }, { passive: true });
+
 addEventListener('touchmove', e => {
-  e.preventDefault();
-  if (sx === null) return;
+  if (e.cancelable) e.preventDefault();
+  if (sx === null || sy === null) return;
   const t = e.touches[0], dx = t.clientX - sx, dy = t.clientY - sy;
-  if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_DIST) return;
   turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
   sx = t.clientX; sy = t.clientY;
 }, { passive: false });
+
 addEventListener('touchend', () => { sx = sy = null; });
-// mouse drag & keyboard for desktop
+addEventListener('touchcancel', () => { sx = sy = null; });
+
+// Mouse drag & keyboard for desktop testing
 let md = null;
 addEventListener('mousedown', e => { md = { x: e.clientX, y: e.clientY }; });
 addEventListener('mousemove', e => {
   if (!md) return;
   const dx = e.clientX - md.x, dy = e.clientY - md.y;
-  if (Math.max(Math.abs(dx), Math.abs(dy)) < 18) return;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_DIST) return;
   turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
   md = { x: e.clientX, y: e.clientY };
 });
